@@ -1,6 +1,6 @@
 # Realtime payment notifications with a risk gate
 
-From a platform standpoint the interesting bit is the policy fork: low-risk payments emit a passive in-app notice, but anything scoring risk >=70 forces the user back into the authenticated app to confirm, and Infrai gives us one api for both message types, plain REST with no SDK to wire up, which means we keep `INFRAI_API_KEY` server-side and hand browsers or mobile only a short-lived channel token, reducing the surface area our on-call has to monitor.
+The decision is the useful part: a routine payment becomes an informational in-app notification, while a payment with a risk score of 70 or above asks the user to return to the authenticated app for confirmation. Infrai carries both messages over one realtime API, and it is plain REST with no SDK to install, so the service keeps `INFRAI_API_KEY` on the server and gives browser or mobile clients only a short-lived channel token.
 
 ## Run the path
 
@@ -11,7 +11,7 @@ npm run setup
 npm run dev
 ```
 
-`npm run setup` sets up the private channel and mints a subscriber token valid for `DEMO_USER_ID` (default `user-42`); the backend key stays server-side as it should. From a second terminal, fire a payment event:
+`npm run setup` creates the private channel and issues a subscriber token for `DEMO_USER_ID` (default `user-42`). The backend key remains server-side. In another terminal, submit a payment event:
 
 ```bash
 curl -X POST http://localhost:3000/payment-events \
@@ -28,34 +28,34 @@ curl -X POST http://localhost:3000/payment-events \
   }'
 ```
 
-Service should return:
+Expected service response:
 
 ```json
 {"accepted":true,"channel":"user:user-42:payments","notificationId":"payment-pay-9001","decision":"confirm_in_app"}
 ```
 
-The `data` that gets published carries payment id, amount, timestamp, policy version, risk band, and decision. That payload lets an operator reconstruct why a given notification path was taken without ever embedding an approval link or privileged action in the message, which keeps our audit story simple.
+The published `data` includes the payment identifier, amount, timestamp, policy version, risk band, and decision. Those fields let an operator explain why the notification was selected without placing an approval link or privileged action in the message itself.
 
 ## The copyable boundary
 
-`src/infrai_realtime.ts` stays minimal by design. Each call pins its HTTP method, auths with the env key, decodes the `{ok, data, error, metadata}` envelope before trusting status, backs off on HTTP 429 with exponential delay or `Retry-After`, and sends an idempotency key for anything state-changing. `src/payment_notification_service.ts` translates normal API rejects into a client 4xx.
+`src/infrai_realtime.ts` is deliberately small. Every call sets its HTTP method, authenticates with the environment key, decodes the `{ok, data, error, metadata}` envelope before interpreting status, retries HTTP 429 with exponential delay or `Retry-After`, and supplies an idempotency key for state-changing requests. `src/payment_notification_service.ts` maps ordinary API rejections back to a client 4xx response.
 
-The only sharp edge is identity alignment: the setup channel, the token-allowed channel, and the publish channel have to be the same user-scoped string. We derive all three as `user:<userId>:payments` here so that authz boundary is explicit rather than buried in config, which matters when you are capacity-planning for a multi-tenant rollout and need to reason about SLO impact of a mismatch.
+The one real gotcha is identity alignment: the channel created during setup, the channel allowed by the client token, and the channel used for publishing must be the same user-scoped string. This example derives all three as `user:<userId>:payments`, which makes that authorization boundary visible instead of hiding it in configuration.
 
 ## Verify the decision
 
-The narrow test pushes `riskScore: 82` through the policy and asserts `payment.review_required`, the `confirm_in_app` decision, and the `elevated` audit band:
+The focused test feeds `riskScore: 82` into the policy and expects `payment.review_required`, the `confirm_in_app` decision, and the `elevated` audit band:
 
 ```bash
 npm test
 npm run typecheck
 ```
 
-This repo covers channel setup, client-token issuance, request validation, policy selection, and publish. The client WebSocket rendering and the authenticated confirmation screen are someone else's problem, i.e. the consuming app, which is fine because our SLO is about delivery correctness not UI.
+This repository demonstrates channel setup, client-token issuance, request validation, policy selection, and publication. Client WebSocket rendering and the authenticated payment-confirmation screen belong to the consuming application.
 
 ## Going to production: Fintech Realtime Payment Notifications
 
-Above is the happy path. The production checklist for Fintech Realtime Payment Notifications is below.
+Above is the happy path. The production checklist: The details below apply to Fintech Realtime Payment Notifications.
 
 **Account & key**
 
